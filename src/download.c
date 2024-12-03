@@ -4,53 +4,93 @@
 int parse(char *input, struct URL *url) {
 
     regex_t regex;  //estrutura que guarda a expressão regular
-    regcomp(&regex, BAR, 0);
+    regcomp(&regex, BAR, 0);    //compila a expressão regular defeinida pela barra
     
-    if (regexec(&regex, input, 0, NULL, 0)) return -1;
+    if (regexec(&regex, input, 0, NULL, 0)){
+        //A URL não contém '/' logo não tem recurso
+        printf("Resource not found\n");
+        return -1;
+    } 
 
-    regcomp(&regex, AT, 0);
+    regcomp(&regex, AT, 0); //compila a expressão regular definida pelo arroba
     if (regexec(&regex, input, 0, NULL, 0) != 0) { //ftp://<host>/<url-path>
         
+        //A URL não contém '@' logo não tem user nem password
+
         sscanf(input, HOST_REGEX, url->host);
-        strcpy(url->user, DEFAULT_USER);
-        strcpy(url->password, DEFAULT_PASSWORD);
+        strcpy(url->user, DEFAULT_USER); //'anonymous'
+        strcpy(url->password, DEFAULT_PASSWORD); //'password'
 
     } else { // ftp://[<user>:<password>@]<host>/<url-path>
+
+        //A URL contém '@' logo tem user e password
 
         sscanf(input, HOST_AT_REGEX, url->host);
         sscanf(input, USER_REGEX, url->user);
         sscanf(input, PASS_REGEX, url->password);
     }
 
+    //Utiliza uma expressão regular para obter o recurso da URL
     sscanf(input, RESOURCE_REGEX, url->resource);
+    
+    //extrai o nome do ficheiro da URL apratir da ultima barra
     strcpy(url->file, strrchr(input, '/') + 1);
 
+    //estrutura que guarda os dados do servidor
     struct hostent *h;
-    if (strlen(url->host) == 0) return -1;
-    if ((h = gethostbyname(url->host)) == NULL) {
+    
+    //verifica se o host foi preenchido
+    if (strlen(url->host) == 0){
+        printf("Host not found\n");
+        return -1;
+    } 
+
+    //Função que retorna um ponteiro para a estrutura hostent contendo informações sobre o host especificado incluindo o endereço IP
+    h = gethostbyname(url->host);
+    if (h == NULL) {
         printf("Invalid hostname '%s'\n", url->host);
         exit(-1);
     }
+    
+    //Converte o endereço IP retornado por gethostbyname para uma string legível usando inet_ntoa(O IP fica com este formato "xxx.xxx.xxx.xxx") e copia essa string para o campo ip da estrutura url.
     strcpy(url->ip, inet_ntoa(*((struct in_addr *) h->h_addr)));
 
-    return !(strlen(url->host) && strlen(url->user) && 
-           strlen(url->password) && strlen(url->resource) && strlen(url->file));
+    //Verifica se algum dos campos da estrutura URL está vazio e retorna -1 se estiver
+    
+    
+    if (strlen(url->resource) == 0){
+        printf("Resource not found\n");
+        return -1;
+    }
+    else if (strlen(url->file) == 0){
+        printf("File not found\n");
+        return -1;
+    }
+
+    
+    
+    return 0;
 }
 
+//função que cria uma socket que conecta ao servidor com o ip e porto passados por argumento
 int createSocket(char *ip, int port) {
 
-    int sockfd;
-    struct sockaddr_in server_addr;
+    int sockfd; //file descriptor da socket
+    struct sockaddr_in server_addr; //estrutura que guarda o endereço do servidor
 
-    bzero((char *) &server_addr, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = inet_addr(ip);  
-    server_addr.sin_port = htons(port); 
-    
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    //inicialização da estrutura server_addr
+    bzero((char *) &server_addr, sizeof(server_addr)); //zera a estrutura
+    server_addr.sin_family = AF_INET;   //família de endereços psra IPv4 16 bits (2 bytes)
+    server_addr.sin_addr.s_addr = inet_addr(ip);  //converter o endereço IP para o formato de 32 bits (4 bytes)
+    server_addr.sin_port = htons(port); //converte a porta do formato de host (little-endian) para o formato de rede (big-endian) de 16 bits (2 bytes)
+
+    sockfd = socket(AF_INET, SOCK_STREAM, 0); //cria a socket do tipo TCP (SOCK_STREAM) e da família de endereços IPv4 (AF_INET)
+    if (sockfd < 0) {
         perror("socket()");
         exit(-1);
     }
+
+    //tenta estabelecer uma conexão com o servidor usando a socket criada e a estrutura server_addr com o endereço do servidor
     if (connect(sockfd, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
         perror("connect()");
         exit(-1);
@@ -59,18 +99,26 @@ int createSocket(char *ip, int port) {
     return sockfd;
 }
 
+//função que autentica a conexão com o servidor FTP com o username e password dados pelo utilizador
 int authConn(const int socket, const char* user, const char* pass) {
 
-    char userCommand[5+strlen(user)+1]; sprintf(userCommand, "user %s\n", user);
-    char passCommand[5+strlen(pass)+1]; sprintf(passCommand, "pass %s\n", pass);
+    //"user <username>\n" = 5 + strlen(username) + 1
+    char userCommand[5+strlen(user)+1];  
+    sprintf(userCommand, "user %s\n", user);
+    
+    //"pass <password>\n" = 5 + strlen(password) + 1
+    char passCommand[5+strlen(pass)+1];
+    sprintf(passCommand, "pass %s\n", pass);
+    
     char answer[MAX_LENGTH];
     
-    write(socket, userCommand, strlen(userCommand));
-    if (readResponse(socket, answer) != SV_READY4PASS) {
+    write(socket, userCommand, strlen(userCommand));        //envia através da socket o comando user <username>
+    if (readResponse(socket, answer) != SV_READY4PASS) {    //lê a resposta do servidor e verifica se o código de resposta é 331
         printf("Unknown user '%s'. Abort.\n", user);
         exit(-1);
     }
-
+    
+    //envia através da socket o comando pass <password>
     write(socket, passCommand, strlen(passCommand));
     return readResponse(socket, answer);
 }
@@ -181,16 +229,23 @@ int main(int argc, char *argv[]) {
     printf("Host: %s\nResource: %s\nFile: %s\nUser: %s\nPassword: %s\nIP Address: %s\n", url.host, url.resource, url.file, url.user, url.password, url.ip);
 
     char answer[MAX_LENGTH];
-    int socketA = createSocket(url.ip, FTP_PORT);
+
+    //cria uma socket para o servidor com o ip dado pelo utilizador e o porto 21
+    int socketA = createSocket(url.ip, FTP_PORT); //21 -> porta padrão para FTP
     if (socketA < 0 || readResponse(socketA, answer) != SV_READY4AUTH) {
         printf("Socket to '%s' and port %d failed\n", url.ip, FTP_PORT);
         exit(-1);
     }
     
+    printf("\nConnected to %s:%d\n", url.ip, FTP_PORT);
+    
+    //autentica a conexão com o servidor com o username e password dados pelo utilizador
     if (authConn(socketA, url.user, url.password) != SV_LOGINSUCCESS) {
         printf("Authentication failed with username = '%s' and password = '%s'.\n", url.user, url.password);
         exit(-1);
     }
+
+    printf("\nAuthentication success with username = '%s' and password = '%s'.\n", url.user);
     
     int port;
     char ip[MAX_LENGTH];
