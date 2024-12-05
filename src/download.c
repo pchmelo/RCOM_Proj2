@@ -123,40 +123,88 @@ int authConn(const int socket, const char* user, const char* pass) {
     return readResponse(socket, answer);
 }
 
+//mete o cliente FTP em modo passivo, o que significa que o servidor vai abrir uma porta e o cliente vai ter de se conectar a essa porta para transferir dados
 int passiveMode(const int socket, char *ip, int *port) {
 
     char answer[MAX_LENGTH];
-    int ip1, ip2, ip3, ip4, port1, port2;
-    write(socket, "pasv\n", 5);
-    if (readResponse(socket, answer) != SV_PASSIVE) return -1;
 
-    sscanf(answer, PASSIVE_REGEX, &ip1, &ip2, &ip3, &ip4, &port1, &port2);
-    *port = port1 * 256 + port2;
-    sprintf(ip, "%d.%d.%d.%d", ip1, ip2, ip3, ip4);
+    int ip1, ip2, ip3, ip4; //variáveis para guardar os 4 bytes do endereço IP
+    int port1, port2;   //variáveis para guardar os 2 bytes da porta de transferência
+    
+    write(socket, "pasv\n", 5); //envia o comando pasv para o servidor, que vai responder com o endereço IP e a porta de transferência
+    
+    if (readResponse(socket, answer) != SV_PASSIVE){
+        printf("Passive mode failed\n");
+        return -1;
+    } 
 
-    return SV_PASSIVE;
+    sscanf(answer, PASSIVE_REGEX, &ip1, &ip2, &ip3, &ip4, &port1, &port2);  //227 Entering Passive Mode (h1,h2,h3,h4,p1,p2).
+    
+    *port = port1 * 256 + port2;    //calcula a porta de transferência a partir dos 2 bytes recebidos
+    
+    sprintf(ip, "%d.%d.%d.%d", ip1, ip2, ip3, ip4); //Formata o endereço IP como uma string no formato "xxx.xxx.xxx.xxx"
+
+    return 0;
 }
 
+/*
+START: Estado inicial, onde a resposta começa a ser lida.
+SINGLE: Estado para uma linha de resposta única.
+MULTIPLE: Estado para uma resposta de múltiplas linhas.
+END: Estado final, onde a leitura da resposta termina.
+
+esposta de Linha Única:
+220 Welcome to the FTP server.
+331 User name okay, need password.
+230 User logged in, proceed.
+
+Resposta de Múltiplas Linhas:
+150-File status okay; about to open data connection.
+150 Opening data connection.
+*/
+
+
+
+//função que lê a resposta do servidor e retorna o código de resposta
 int readResponse(const int socket, char* buffer) {
 
-    char byte;
-    int index = 0, responseCode;
-    ResponseState state = START;
-    memset(buffer, 0, MAX_LENGTH);
+    char byte; //variável para guardar qualquer byte lido da socket
+    int index = 0;  //índice para a posição do buffer
+    int responseCode;   //variável para guardar o código de resposta extraído da resposta do servidor
+    
+    ResponseState state = START; //estado inicial da máquina de estados que lê a resposta do servidor
+    memset(buffer, 0, MAX_LENGTH); //inicializa o buffer com 0s 
 
-    while (state != END) {
+    printf("\n<----------------- Server response ----------------->\n");
+
+    while (state != END) {  //enquanto o estado não for END
         
-        read(socket, &byte, 1);
+        read(socket, &byte, 1); //lê um byte da socket
+        printf("%c", byte);
         switch (state) {
             case START:
-                if (byte == ' ') state = SINGLE;
-                else if (byte == '-') state = MULTIPLE;
-                else if (byte == '\n') state = END;
-                else buffer[index++] = byte;
+                if (byte == ' '){
+                    state = SINGLE; 
+                }    
+                else if (byte == '-'){
+                    state = MULTIPLE;
+                }
+                else if (byte == '\n'){
+                    state = END;
+                }
+                else{
+                    buffer[index] = byte;
+                    index++;
+                } 
                 break;
             case SINGLE:
-                if (byte == '\n') state = END;
-                else buffer[index++] = byte;
+                if (byte == '\n'){
+                    state = END;
+                }
+                else{
+                    buffer[index] = byte;
+                    index++;
+                } 
                 break;
             case MULTIPLE:
                 if (byte == '\n') {
@@ -164,7 +212,10 @@ int readResponse(const int socket, char* buffer) {
                     state = START;
                     index = 0;
                 }
-                else buffer[index++] = byte;
+                else{
+                    buffer[index] = byte;
+                    index++;
+                }
                 break;
             case END:
                 break;
@@ -173,18 +224,25 @@ int readResponse(const int socket, char* buffer) {
         }
     }
 
-    sscanf(buffer, RESPCODE_REGEX, &responseCode);
+    printf("<--------------------------------------->\n");
+
+
+    sscanf(buffer, RESPCODE_REGEX, &responseCode); //lê o codigo de resposta da resposta do servidor com uso de uma expressão regular
     return responseCode;
 }
 
+//função que pede ao servidor para solicitar a transferência do arquivo do servidor FTP 
 int requestResource(const int socket, char *resource) {
-
+    //retr <filename>\n = 5 + strlen(filename) + 1
     char fileCommand[5+strlen(resource)+1], answer[MAX_LENGTH];
     sprintf(fileCommand, "retr %s\n", resource);
     write(socket, fileCommand, sizeof(fileCommand));
     return readResponse(socket, answer);
 }
 
+//função que recebe o arquivo do servidor FTP e guarda-o localmente
+//utilizando a socket de transferência (socketB) para receber os dados.
+//a soket A é utilizada como controlo para verificar se a transferência foi bem sucedida
 int getResource(const int socketA, const int socketB, char *filename) {
 
     FILE *fd = fopen(filename, "wb");
@@ -194,21 +252,33 @@ int getResource(const int socketA, const int socketB, char *filename) {
     }
 
     char buffer[MAX_LENGTH];
-    int bytes;
+    int bytes;  //variável para guardar o número de bytes lidos da socket de transferência
+    
     do {
-        bytes = read(socketB, buffer, MAX_LENGTH);
-        if (fwrite(buffer, bytes, 1, fd) < 0) return -1;
+        bytes = read(socketB, buffer, MAX_LENGTH); //lê os dados da socket de transferência
+        if (fwrite(buffer, bytes, 1, fd) < 0){ //escreve os dados lidos no ficheiro
+            printf("Error writing to file '%s'\n", filename);
+            return -1;
+        }
     } while (bytes);
+    
     fclose(fd);
 
     return readResponse(socketA, buffer);
 }
 
+//função que fecha as duas sockets de controlo e de transferência
 int closeConnection(const int socketA, const int socketB) {
     
     char answer[MAX_LENGTH];
     write(socketA, "quit\n", 5);
-    if(readResponse(socketA, answer) != SV_GOODBYE) return -1;
+
+    //recebe 221 do servidor, o que significa que a conexão foi fechada
+    if(readResponse(socketA, answer) != SV_GOODBYE){
+        printf("Error closing connection\n");
+        return -1;
+    }
+
     return close(socketA) || close(socketB);
 }
 
@@ -249,31 +319,42 @@ int main(int argc, char *argv[]) {
     
     int port;
     char ip[MAX_LENGTH];
-    if (passiveMode(socketA, ip, &port) != SV_PASSIVE) {
+    if (passiveMode(socketA, ip, &port) != 0) {
         printf("Passive mode failed\n");
         exit(-1);
     }
 
-    int socketB = createSocket(ip, port);
+    printf("\nPassive mode success with IP = '%s' and port = '%d'.\n", ip, port);
+
+    int socketB = createSocket(ip, port);  //cria uma socket para o servidor com o ip e porto de transferência dados pelo servidor 
     if (socketB < 0) {
         printf("Socket to '%s:%d' failed\n", ip, port);
         exit(-1);
     }
 
-    if (requestResource(socketA, url.resource) != SV_READY4TRANSFER) {
+    printf("\nConnected  the transfer socket to %s:%d\n", ip, port);
+
+    if (requestResource(socketA, url.resource) != SV_READY4TRANSFER) {  //se receber a resposta 150 do servidor, então o servidor está pronto para transferir o arquivo
         printf("Unknown resouce '%s' in '%s:%d'\n", url.resource, ip, port);
         exit(-1);
     }
 
+    printf("\nResource '%s' ready for transfer from '%s:%d'\n", url.resource, ip, port);
+
+    //recebe 226 do servidor, o que significa que a transferência foi bem sucedida
     if (getResource(socketA, socketB, url.file) != SV_TRANSFER_COMPLETE) {
         printf("Error transfering file '%s' from '%s:%d'\n", url.file, ip, port);
         exit(-1);
     }
 
+     printf("\nFile '%s' transfered successfully from '%s:%d'\n", url.file, ip, port);
+
     if (closeConnection(socketA, socketB) != 0) {
         printf("Sockets close error\n");
         exit(-1);
     }
+
+    printf("\nConnection closed\n");
 
     return 0;
 }
