@@ -111,12 +111,16 @@ int authConn(const int socket, const char* user, const char* pass) {
     sprintf(passCommand, "pass %s\n", pass);
     
     char answer[MAX_LENGTH];
+
     
     write(socket, userCommand, strlen(userCommand));        //envia através da socket o comando user <username>
+    
+    
     if (readResponse(socket, answer) != SV_READY4PASS) {    //lê a resposta do servidor e verifica se o código de resposta é 331
         printf("Unknown user '%s'. Abort.\n", user);
         exit(-1);
     }
+
     
     //envia através da socket o comando pass <password>
     write(socket, passCommand, strlen(passCommand));
@@ -167,54 +171,46 @@ Resposta de Múltiplas Linhas:
 
 //função que lê a resposta do servidor e retorna o código de resposta
 int readResponse(const int socket, char* buffer) {
+    char byte;
+    int index = 0, responseCode = 0;
+    enum { START, SINGLE, MULTIPLE, END } state = START;
+    memset(buffer, 0, MAX_LENGTH);
 
-    char byte; //variável para guardar qualquer byte lido da socket
-    int index = 0;  //índice para a posição do buffer
-    int responseCode;   //variável para guardar o código de resposta extraído da resposta do servidor
-    
-    ResponseState state = START; //estado inicial da máquina de estados que lê a resposta do servidor
-    memset(buffer, 0, MAX_LENGTH); //inicializa o buffer com 0s 
-
-    printf("\n<----------------- Server response ----------------->\n");
-
-    while (state != END) {  //enquanto o estado não for END
-        
-        read(socket, &byte, 1); //lê um byte da socket
-        printf("%c", byte);
+    while (state != END) {
+        read(socket, &byte, 1);
+        printf("%c", byte); // Imprime cada byte lido no terminal
         switch (state) {
             case START:
-                if (byte == ' '){
-                    state = SINGLE; 
-                }    
-                else if (byte == '-'){
+                if (byte == ' ') {
+                    state = SINGLE;
+                } else if (byte == '-') {
                     state = MULTIPLE;
-                }
-                else if (byte == '\n'){
+                } else if (byte == '\n') {
                     state = END;
+                } else {
+                    buffer[index++] = byte;
                 }
-                else{
-                    buffer[index] = byte;
-                    index++;
-                } 
                 break;
             case SINGLE:
-                if (byte == '\n'){
+                if (byte == '\n') {
                     state = END;
+                } else {
+                    buffer[index++] = byte;
                 }
-                else{
-                    buffer[index] = byte;
-                    index++;
-                } 
                 break;
             case MULTIPLE:
                 if (byte == '\n') {
+                    // Captura o código de resposta da primeira linha
+                    if (responseCode == 0) {
+                        buffer[index] = '\0'; // Termina a string
+                        sscanf(buffer, "%3d", &responseCode);
+                    }
+                    // Reinicializa o buffer para a próxima linha
                     memset(buffer, 0, MAX_LENGTH);
-                    state = START;
                     index = 0;
-                }
-                else{
-                    buffer[index] = byte;
-                    index++;
+                    state = START;
+                } else {
+                    buffer[index++] = byte;
                 }
                 break;
             case END:
@@ -224,10 +220,12 @@ int readResponse(const int socket, char* buffer) {
         }
     }
 
-    printf("<--------------------------------------->\n");
-
-
-    sscanf(buffer, RESPCODE_REGEX, &responseCode); //lê o codigo de resposta da resposta do servidor com uso de uma expressão regular
+    // Captura o código de resposta da primeira linha se ainda não foi capturado
+    if (responseCode == 0) {
+        buffer[index] = '\0'; // Termina a string
+        sscanf(buffer, "%3d", &responseCode);
+    }
+    printf("Response code: %d\n", responseCode);
     return responseCode;
 }
 
@@ -302,8 +300,14 @@ int main(int argc, char *argv[]) {
 
     //cria uma socket para o servidor com o ip dado pelo utilizador e o porto 21
     int socketA = createSocket(url.ip, FTP_PORT); //21 -> porta padrão para FTP
-    if (socketA < 0 || readResponse(socketA, answer) != SV_READY4AUTH) {
+    
+    if(socketA < 0){
         printf("Socket to '%s' and port %d failed\n", url.ip, FTP_PORT);
+        exit(-1);
+    }
+    
+    if (readResponse(socketA, answer) != SV_READY4AUTH) {
+        printf("Unknown server '%s'. Abort.\n", url.ip);
         exit(-1);
     }
     
