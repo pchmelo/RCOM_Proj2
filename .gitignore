@@ -1,0 +1,11 @@
+# Ignore everything
+*
+
+# Don't ignore directories, so we can re-include specific files
+!*/
+
+# Include specific files
+!download.c
+!download.h
+!Makefile
+!.gitignore
