@@ -1,5 +1,25 @@
 #include "download.h"
 
+/*
+Protoclo FTP
+1. Parse URL
+2. Procura pelas resolved addresses com as informações do hostname e port
+3. Cria uma socket com as características dos resolved addresses
+3. Conecta a socket ao servidor
+4. Recebe a resposta do servidor e espera pelo código 220
+5. Envia o comando USER com o username e espera pelo código 331
+6. Envia o comando PASS com a password e espera pelo código 230 
+7. Envia o comando PASV e espera pelo código 227
+8. Com o IP e porta do PASV, cria uma nova socket e conecta ao servidor
+9. Envia o comando TYPE I e espera pelo código 200
+10. Envio o comando SIZE com o nome do ficheiro e espera pelo código 213, e guarda o tamanho do ficheiro
+11. Envia o comando RETR com o nome do ficheiro e espera pelo código 150v ou 125
+12. Recebe o ficheiro pela segunda socket
+13. Fecha a segunda socket
+14. Recebe a resposta do servidor e espera pelo código 226, para confirmar a transferência
+15. Fecha a primeira socket
+*/
+
 int main(int argc, char** argv)
 {
 	if (argc!=2)
@@ -271,17 +291,37 @@ void dataConnection(int sd2, char * filename, int filesize)
 	
 	int fd = open(filename, O_CREAT|O_TRUNC|O_WRONLY, 0777);
 	
-	while( (bytesReceived = recv(sd2, buffer, FILE_BUFFER_SIZE, 0)) != 0 )
-	{		
-		if(bytesReceived == -1){
+	while (1) {
+	
+		bytesReceived = recv(sd2, buffer, FILE_BUFFER_SIZE, 0);
+		
+		if (bytesReceived == 0) {
+			break;
+		} else if (bytesReceived == -1) {
 			perror("Error receiving file data");
+			break;
+		} else {
+			int bytesWritten = 0;
+			while (bytesWritten < bytesReceived) {
+				int result = write(fd, buffer + bytesWritten, bytesReceived - bytesWritten);
+				if (result == -1) {
+					perror("Error writing file data");
+					break;
+				}
+				bytesWritten += result;
+			}
+			totalBytes += bytesReceived;
 		}
-		else{
-			write(fd, buffer, bytesReceived);
-			totalBytes += bytesReceived;			
+
+		if (DEBUG) {
+			printf("(%d)", bytesReceived);
+		} else {
+			loadingBar(totalBytes, filesize);
 		}
-		if (DEBUG) printf("(%d)", bytesReceived);
-		else loadingBar(totalBytes, filesize);
+
+		if (totalBytes == filesize) {
+			break;
+		}
 	}
 	printf("\n");
 
