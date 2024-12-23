@@ -55,6 +55,8 @@ int sendComand(int sd, char * userCmd, char * response)
 		exit(-1);
 	}
 
+	sleep(1);
+
 	int received = recv(sd, response, RESP_BUFFER_SIZE, 0);
 	if(received == -1){
 		perror("Error receiving response from USER");

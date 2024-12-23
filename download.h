@@ -12,7 +12,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#define DEBUG 1
+#define DEBUG 0
 #define RESP_BUFFER_SIZE 1024
 #define FILE_BUFFER_SIZE 1024
 
